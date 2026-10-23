@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: erp_demo
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: erp_demo_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U erp_demo -d erp_demo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      API_KEY: test-connector-not-a-secret-1234567890
+      ERP_API_KEY: test-source-not-a-secret-123456789012
+      DATABASE_URL: postgresql+psycopg://erp_demo:ci-only-password@localhost:5432/erp_demo_test
+      TEST_DATABASE_URL: postgresql+psycopg://erp_demo:ci-only-password@localhost:5432/erp_demo_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: pip install -r requirements.lock && pip install --no-deps -e .
+      - run: ruff check . && ruff format --check .
+      - run: alembic upgrade head && alembic check
+      - run: pytest -q
+      - run: docker build -t erp-integration-demo:ci .

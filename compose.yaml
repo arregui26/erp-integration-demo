@@ -1,0 +1,61 @@
+name: erp-integration-demo
+x-app: &app
+  image: erp-integration-demo:local
+  build: .
+  environment: &environment
+    API_KEY: ${API_KEY:?Copy .env.example to .env first}
+    ERP_API_KEY: ${ERP_API_KEY:?Set source API key}
+    DATABASE_URL: postgresql+psycopg://erp_demo:${POSTGRES_PASSWORD:?Set database password}@db:5432/erp_demo
+    ERP_BASE_URL: http://erp:8000
+    SOURCE_DB_PATH: /data/erp-demo.db
+    PAGE_SIZE: ${PAGE_SIZE:-2}
+    MAX_PAGES: ${MAX_PAGES:-10}
+    RETRY_ATTEMPTS: ${RETRY_ATTEMPTS:-3}
+  init: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  tmpfs: [/tmp]
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: erp_demo
+      POSTGRES_DB: erp_demo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set database password}
+    ports: ["127.0.0.1:5410:5432"]
+    volumes: ["projection-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U erp_demo -d erp_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  erp:
+    <<: *app
+    command: [uvicorn, "erp_connector.simulator:create_app", --factory, --host, "0.0.0.0", --port, "8000"]
+    ports: ["127.0.0.1:8110:8000"]
+    volumes: ["source-data:/data"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  migrate:
+    <<: *app
+    command: [alembic, upgrade, head]
+    depends_on:
+      db: {condition: service_healthy}
+  connector:
+    <<: *app
+    ports: ["127.0.0.1:8010:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      erp: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+volumes:
+  projection-data:
+  source-data:
